@@ -107,7 +107,10 @@ class BrowserEngine:
     async def take_screenshot(self) -> bytes | None:
         if not self._page:
             return None
-        return await self._page.screenshot(type="png", full_page=False)
+        try:
+            return await self._page.screenshot(type="png", full_page=False, timeout=15000)
+        except Exception:
+            return None
 
     async def _extract_content(self, retries: int = 2) -> PageContent:
         if not self._page:
@@ -130,6 +133,7 @@ class BrowserEngine:
         url = self._page.url
 
         text_content = await self._page.evaluate("""() => {
+            if (!document.body) return '';
             function extractText(node, depth = 0) {
                 const results = [];
                 const BLOCK_TAGS = new Set([
