@@ -1,9 +1,108 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+
+
+USER_DATA_DIR = Path.home() / ".local" / "share" / "tui-browser" / "profile"
+
+STEALTH_JS = """
+(() => {
+    // 1. navigator.webdriver を隠す
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+        configurable: true,
+    });
+    // Chromium の webdriver プロパティをプロトタイプからも削除
+    delete Object.getPrototypeOf(navigator).webdriver;
+
+    // 2. プラグインを偽装
+    const fakePlugins = {
+        0: { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer',
+             description: 'Portable Document Format', length: 1,
+             0: { type: 'application/x-google-chrome-pdf', suffixes: 'pdf',
+                  description: 'Portable Document Format', enabledPlugin: null } },
+        1: { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+             description: '', length: 1,
+             0: { type: 'application/pdf', suffixes: 'pdf',
+                  description: '', enabledPlugin: null } },
+        2: { name: 'Native Client', filename: 'internal-nacl-plugin',
+             description: '', length: 2,
+             0: { type: 'application/x-nacl', suffixes: '',
+                  description: 'Native Client Executable', enabledPlugin: null },
+             1: { type: 'application/x-pnacl', suffixes: '',
+                  description: 'Portable Native Client Executable', enabledPlugin: null } },
+        length: 3,
+        item: function(i) { return this[i] || null; },
+        namedItem: function(name) {
+            for (let i = 0; i < this.length; i++) {
+                if (this[i].name === name) return this[i];
+            }
+            return null;
+        },
+        refresh: function() {},
+        [Symbol.iterator]: function*() { for (let i = 0; i < this.length; i++) yield this[i]; },
+    };
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => fakePlugins,
+        configurable: true,
+    });
+
+    // 3. languages を自然な値に
+    Object.defineProperty(navigator, 'languages', {
+        get: () => ['ja', 'en-US', 'en'],
+        configurable: true,
+    });
+    Object.defineProperty(navigator, 'language', {
+        get: () => 'ja',
+        configurable: true,
+    });
+
+    // 4. Chrome runtime を偽装（存在チェックを通す）
+    window.chrome = {
+        app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+        runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' }, connect: function() {}, sendMessage: function() {} },
+        csi: function() { return {}; },
+        loadTimes: function() { return {}; },
+    };
+
+    // 5. Permissions API の挙動を通常に
+    if (navigator.permissions) {
+        const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+        navigator.permissions.query = (parameters) => {
+            if (parameters.name === 'notifications') {
+                return Promise.resolve({ state: Notification.permission });
+            }
+            return originalQuery(parameters);
+        };
+    }
+
+    // 6. WebGL vendor/renderer を偽装
+    const getParamProto = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(param) {
+        if (param === 37445) return 'Google Inc. (Intel)';
+        if (param === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
+        return getParamProto.call(this, param);
+    };
+
+    // 7. iframe contentWindow の挙動を正常化
+    const origDescriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
+    if (origDescriptor) {
+        Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+            get: function() {
+                const win = origDescriptor.get.call(this);
+                if (win) {
+                    try { Object.defineProperty(win.navigator, 'webdriver', { get: () => undefined }); } catch {}
+                }
+                return win;
+            }
+        });
+    }
+})();
+"""
 
 
 @dataclass
@@ -42,22 +141,34 @@ class BrowserEngine:
 
     async def start(self) -> None:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
+
+        USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(USER_DATA_DIR),
             headless=True,
-            args=["--no-sandbox", "--disable-gpu"],
-        )
-        self._context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 720},
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+            ],
+            viewport={"width": 1366, "height": 768},
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             ),
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+            ignore_https_errors=True,
         )
-        self._page = await self._context.new_page()
+
+        await self._context.add_init_script(STEALTH_JS)
+        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        await self._page.evaluate("() => {\n" + STEALTH_JS + "\n}")
 
     async def stop(self) -> None:
-        if self._browser:
-            await self._browser.close()
+        if self._context:
+            await self._context.close()
         if self._playwright:
             await self._playwright.stop()
 
