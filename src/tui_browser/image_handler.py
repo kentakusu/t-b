@@ -5,11 +5,9 @@ import shutil
 from io import BytesIO
 
 from PIL import Image
-from rich.text import Text
 
 
 HALF_BLOCK = "▄"
-UPPER_HALF = "▀"
 
 
 def detect_image_protocol() -> str:
@@ -80,8 +78,3 @@ def render_screenshot(
     )
 
 
-def image_to_text_placeholder(alt: str, src: str) -> Text:
-    text = Text()
-    display_alt = alt if alt else "image"
-    text.append(f"[🖼 {display_alt}]", style="italic dim")
-    return text

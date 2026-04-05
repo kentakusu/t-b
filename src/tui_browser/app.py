@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import sys
-
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -14,7 +11,6 @@ from textual.widgets import (
     Static,
     RichLog,
 )
-from textual.message import Message
 from rich.text import Text
 
 from .engine import BrowserEngine, PageContent

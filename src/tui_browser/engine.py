@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,7 +14,6 @@ class PageContent:
     links: list[dict[str, str]] = field(default_factory=list)
     images: list[dict[str, str]] = field(default_factory=list)
     screenshot: bytes | None = None
-    accessibility_tree: dict[str, Any] | None = None
 
 
 class BrowserEngine:
