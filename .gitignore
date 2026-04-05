@@ -7,3 +7,5 @@ data/
 *.db
 *.log
 .omc/
+__pycache__/
+*.pyc
