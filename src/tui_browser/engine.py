@@ -111,7 +111,20 @@ class BrowserEngine:
             return None
         return await self._page.screenshot(type="png", full_page=False)
 
-    async def _extract_content(self) -> PageContent:
+    async def _extract_content(self, retries: int = 2) -> PageContent:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+
+        for attempt in range(retries + 1):
+            try:
+                return await self._do_extract_content()
+            except Exception as e:
+                if "Execution context was destroyed" in str(e) and attempt < retries:
+                    await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    continue
+                raise
+
+    async def _do_extract_content(self) -> PageContent:
         if not self._page:
             raise RuntimeError("Browser not started")
 
