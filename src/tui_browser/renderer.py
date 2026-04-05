@@ -3,10 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from rich.console import Console, ConsoleOptions, RenderResult
-from rich.markup import escape
 from rich.text import Text
-from rich.panel import Panel
 
 
 @dataclass
@@ -121,4 +118,59 @@ class PageRenderer:
             text.append(f"  → {link.href[:80]}\n", style="dim")
         if len(self._links) > 50:
             text.append(f"\n  ... and {len(self._links) - 50} more links\n", style="dim")
+        return text
+
+    @staticmethod
+    def get_form_list_text(forms: list) -> Text:
+        text = Text()
+        if not forms:
+            text.append("No interactive elements on this page.\n", style="dim")
+            return text
+
+        text.append("Interactive elements:\n\n", style="bold underline")
+        for f in forms[:50]:
+            tag = f.tag
+            etype = f.type
+            label = f.label or f.name or f.placeholder or ""
+
+            if tag == "button" or etype in ("submit", "button"):
+                icon = "BTN"
+                style = "bold green"
+                desc = label or f.value or "Button"
+            elif tag == "select":
+                icon = "SEL"
+                style = "bold cyan"
+                opts = ", ".join(f.options[:5])
+                desc = f"{label}: [{opts}]" if label else f"[{opts}]"
+            elif etype in ("checkbox", "radio"):
+                checked = "x" if f.checked else " "
+                icon = "CHK" if etype == "checkbox" else "RAD"
+                style = "bold yellow"
+                desc = f"[{checked}] {label}"
+            elif tag == "textarea":
+                icon = "TXT"
+                style = "bold magenta"
+                desc = label or f.placeholder or "Textarea"
+            else:
+                icon = "INP"
+                style = "bold white"
+                type_hint = f"({etype})" if etype and etype != "text" else ""
+                desc = f"{label or f.placeholder or 'Input'} {type_hint}".strip()
+                if f.value:
+                    desc += f' = "{f.value[:30]}"'
+
+            text.append(f"  {{{f.index}}} ", style="green bold")
+            text.append(f"[{icon}] ", style=style)
+            text.append(f"{desc[:70]}\n")
+
+        if len(forms) > 50:
+            text.append(f"\n  ... and {len(forms) - 50} more elements\n", style="dim")
+
+        text.append("\nUsage: ", style="bold")
+        text.append("f<N> <text>", style="green")
+        text.append(" = type, ")
+        text.append("b<N>", style="green")
+        text.append(" = click, ")
+        text.append("s<N>", style="green")
+        text.append(" = submit\n")
         return text

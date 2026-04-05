@@ -7,12 +7,27 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 
 @dataclass
+class FormElement:
+    index: int
+    tag: str
+    type: str
+    name: str
+    value: str
+    placeholder: str
+    label: str
+    options: list[str] = field(default_factory=list)
+    checked: bool = False
+    disabled: bool = False
+
+
+@dataclass
 class PageContent:
     url: str
     title: str
     text_content: str
     links: list[dict[str, str]] = field(default_factory=list)
     images: list[dict[str, str]] = field(default_factory=list)
+    forms: list[FormElement] = field(default_factory=list)
     screenshot: bytes | None = None
 
 
@@ -90,6 +105,73 @@ class BrowserEngine:
 
     async def click_link(self, url: str) -> PageContent:
         return await self.navigate(url)
+
+    async def click_element(self, selector: str) -> PageContent:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+        await self._page.click(selector, timeout=5000)
+        try:
+            await self._page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+        return await self._extract_content()
+
+    async def type_into_element(self, selector: str, text: str) -> None:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+        await self._page.fill(selector, text, timeout=5000)
+
+    async def select_option(self, selector: str, value: str) -> None:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+        await self._page.select_option(selector, label=value, timeout=5000)
+
+    async def toggle_checkbox(self, selector: str) -> None:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+        checked = await self._page.is_checked(selector, timeout=5000)
+        if checked:
+            await self._page.uncheck(selector, timeout=5000)
+        else:
+            await self._page.check(selector, timeout=5000)
+
+    async def submit_form(self, selector: str) -> PageContent:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+        await self._page.press(selector, "Enter", timeout=5000)
+        try:
+            await self._page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        return await self._extract_content()
+
+    async def interact_form(self, index: int, value: str | None = None) -> PageContent | None:
+        if not self._page:
+            raise RuntimeError("Browser not started")
+
+        selector = f"[data-tui-form-idx='{index}']"
+        element = await self._page.query_selector(selector)
+        if not element:
+            raise ValueError(f"Form element {index} not found")
+
+        tag = (await element.evaluate("e => e.tagName")).lower()
+        etype = (await element.evaluate("e => e.type || ''")).lower()
+
+        if tag == "button" or etype in ("submit", "button", "reset"):
+            return await self.click_element(selector)
+        elif tag == "select":
+            if value:
+                await self.select_option(selector, value)
+            return None
+        elif etype in ("checkbox", "radio"):
+            await self.toggle_checkbox(selector)
+            return None
+        elif tag in ("input", "textarea"):
+            if value is not None:
+                await self.type_into_element(selector, value)
+            return None
+        else:
+            return await self.click_element(selector)
 
     async def execute_js(self, script: str) -> Any:
         if not self._page:
@@ -209,6 +291,46 @@ class BrowserEngine:
                 }));
         }""")
 
+        forms = await self._page.evaluate("""() => {
+            if (!document.body) return [];
+            const selectors = 'input, textarea, select, button, [role="button"]';
+            const elements = Array.from(document.querySelectorAll(selectors));
+            return elements
+                .filter(el => {
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    if (el.type === 'hidden') return false;
+                    if (el.disabled) return false;
+                    return true;
+                })
+                .slice(0, 100)
+                .map((el, i) => {
+                    el.setAttribute('data-tui-form-idx', String(i));
+                    const tag = el.tagName.toLowerCase();
+                    const label = el.labels?.[0]?.textContent?.trim() ||
+                                  el.getAttribute('aria-label') ||
+                                  el.closest('label')?.textContent?.trim() || '';
+                    return {
+                        index: i,
+                        tag: tag,
+                        type: el.type || '',
+                        name: el.name || '',
+                        value: el.value || '',
+                        placeholder: el.placeholder || '',
+                        label: label.substring(0, 80),
+                        options: tag === 'select'
+                            ? Array.from(el.options).slice(0, 20).map(o => o.text.trim())
+                            : [],
+                        checked: !!el.checked,
+                        disabled: !!el.disabled,
+                    };
+                });
+        }""")
+
+        form_elements = [
+            FormElement(**f) for f in forms
+        ]
+
         screenshot = await self.take_screenshot()
 
         return PageContent(
@@ -217,6 +339,7 @@ class BrowserEngine:
             text_content=text_content,
             links=links,
             images=images,
+            forms=form_elements,
             screenshot=screenshot,
         )
 

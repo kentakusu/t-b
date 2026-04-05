@@ -13,6 +13,8 @@ from textual.widgets import (
 )
 from rich.text import Text
 
+import re
+
 from .engine import BrowserEngine, PageContent
 from .renderer import PageRenderer
 from .image_handler import render_screenshot
@@ -92,6 +94,7 @@ class BrowserApp(App):
         Binding("ctrl+right", "go_forward", "Forward"),
         Binding("ctrl+s", "screenshot_mode", "Screenshot"),
         Binding("ctrl+g", "open_link", "Go to Link #"),
+        Binding("ctrl+f", "show_forms", "Forms"),
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f5", "reload", "Reload", show=False),
     ]
@@ -137,18 +140,25 @@ class BrowserApp(App):
 
     @on(Input.Submitted, "#url-input")
     async def on_url_submitted(self, event: Input.Submitted) -> None:
-        url = event.value.strip()
-        if not url:
+        cmd = event.value.strip()
+        if not cmd:
             return
 
-        if url.isdigit():
-            link = self._renderer.get_link_by_index(int(url))
+        if cmd.isdigit():
+            link = self._renderer.get_link_by_index(int(cmd))
             if link:
                 self._url_input.value = link.href
                 self._navigate(link.href)
                 return
 
-        self._navigate(url)
+        form_match = re.match(r'^([fbs])(\d+)\s*(.*)', cmd, re.DOTALL)
+        if form_match:
+            action, idx_str, value = form_match.groups()
+            idx = int(idx_str)
+            self._handle_form_action(action, idx, value.strip())
+            return
+
+        self._navigate(cmd)
 
     @work(exclusive=True, group="navigation")
     async def _navigate(self, url: str) -> None:
@@ -176,9 +186,10 @@ class BrowserApp(App):
 
             link_count = len(content.links)
             img_count = len(content.images)
+            form_count = len(content.forms)
             self._status(
-                f"✓ {content.title} | {link_count} links, {img_count} images | "
-                f"Enter link # to follow"
+                f"✓ {content.title} | {link_count} links, {form_count} forms | "
+                f"# = link, f/b/s<N> = form, Ctrl+F = list forms"
             )
         except Exception as e:
             content_view.clear()
@@ -308,6 +319,51 @@ class BrowserApp(App):
         self._url_input.value = ""
         self._url_input.placeholder = "Enter link number..."
         self._url_input.focus()
+
+    def action_show_forms(self) -> None:
+        if not self._current_content:
+            self._status("No page loaded")
+            return
+        content_view = self._content_view
+        content_view.clear()
+        form_text = PageRenderer.get_form_list_text(self._current_content.forms)
+        content_view.write(form_text)
+        self._status(
+            f"Forms: {len(self._current_content.forms)} elements | "
+            f"f<N> <text> = type, b<N> = click, s<N> = submit"
+        )
+        self._url_input.value = ""
+        self._url_input.placeholder = "f0 hello / b0 / s0..."
+        self._url_input.focus()
+
+    @work(exclusive=True, group="navigation")
+    async def _handle_form_action(self, action: str, index: int, value: str) -> None:
+        try:
+            if action == "f":
+                await self._engine.interact_form(index, value or None)
+                self._status(f"Typed into element {index}")
+                self._url_input.value = ""
+                self._url_input.placeholder = f"s{index} to submit, or continue..."
+            elif action == "b":
+                content = await self._engine.interact_form(index)
+                if content:
+                    self._current_content = content
+                    self._url_input.value = content.url
+                    self._content_view.clear()
+                    self._render_text(content)
+                    self._status(f"Clicked element {index}")
+                else:
+                    self._status(f"Clicked element {index}")
+            elif action == "s":
+                selector = f"[data-tui-form-idx='{index}']"
+                content = await self._engine.submit_form(selector)
+                self._current_content = content
+                self._url_input.value = content.url
+                self._content_view.clear()
+                self._render_text(content)
+                self._status(f"Submitted form via element {index}")
+        except Exception as e:
+            self._status(f"Form action error: {e}")
 
     async def on_unmount(self) -> None:
         await self._engine.stop()
