@@ -1,25 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
-from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-
-
-def _ensure_library_path() -> None:
-    local_lib = Path.home() / ".local" / "usr" / "lib" / "x86_64-linux-gnu"
-    if local_lib.exists():
-        current = os.environ.get("LD_LIBRARY_PATH", "")
-        lib_str = str(local_lib)
-        if lib_str not in current:
-            os.environ["LD_LIBRARY_PATH"] = f"{lib_str}:{current}" if current else lib_str
-
-
-_ensure_library_path()
 
 
 @dataclass
